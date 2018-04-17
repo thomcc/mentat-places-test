@@ -1,0 +1,9 @@
+[package]
+name = "mentat-places-test"
+version = "0.1.0"
+authors = ["Thom Chiovoloni <tchiovoloni@mozilla.com>"]
+
+[dependencies]
+mentat = { git = "https://github.com/mozilla/mentat.git", branch = "master" }
+rusqlite = { version = "0.13", features = ["bundled", "limits"] }
+
