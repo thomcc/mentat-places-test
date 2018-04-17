@@ -1,6 +1,6 @@
 # Mentat / Places test
 
-I wanted to see how mentat would handle inserting all of the history places and visits from places.sqlite into a mentat database. This does that. The schema I used is pasted into the bottom of this file. It's based on the schema from [the mentat fixtures dir](https://github.com/mozilla/mentat/blob/master/fixtures/cities.schema), and what seemed relevant from [the datomic best practices guide](https://docs.datomic.com/cloud/best.html).
+I wanted to see how mentat would handle inserting all of the history places and visits from places.sqlite into a mentat database. This does that. The schema I used is [here](https://github.com/thomcc/mentat-places-test/blob/master/places.schema). It's based on the schema from [the mentat fixtures dir](https://github.com/mozilla/mentat/blob/master/fixtures/cities.schema), and what seemed relevant from [the datomic best practices guide](https://docs.datomic.com/cloud/best.html).
 
 Usage: `cargo run --release path/to/your/places.sqlite`. Alternate usage `cargo run --release path/to/your/places.sqlite path/to/mentat_places.db` (you can pass path to the output db as a 2nd arg, it defaults to `mentat_places.db` in your cwd). It will show you progress, although the total is an approximation because it's 11PM on a Monday and this took longer than I expected.
 
