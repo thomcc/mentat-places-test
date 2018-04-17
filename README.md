@@ -26,9 +26,9 @@ Edit: I realized this too late to feel like incorporating it into this writeup i
 
 I didn't expect this, but the output mentat DB is somewhat huge. My input places DB is around 13MB (and it contains bookmarks too, although only a couple hundred, the lions share here is certainly the places data).
 
-The output of my mentat DB is around 61MB (which also contains what probably amounts to a negligable number of bookmarks). It compresses about 57% under `lz4 -1`, and only slightly better for `-9`. zstd -22 manages to reduce it to around 17MB, but it's still substantially larger than places.sqlite for reasons I don't understand.
+The output of my mentat DB is around 61MB (which also contains what probably amounts to a negligable number of bookmarks). It compresses about 57% under `lz4 -1`, and only slightly better for `-9`. `zstd -22` manages to reduce it to around 17MB, but it's still substantially larger than places.sqlite for reasons I don't understand.
 
-Edit: I thought about it some and realized that maybe the usage of `:db/fulltext true` is responsible so I redid without that and found that performance was somewhat better (only around 5 minutes to build the DB), but the database file itself was 80MB!!. No idea.
+Edit: I thought about it some and realized that maybe the usage of `:db/fulltext true` is responsible so I redid without that and found that performance was somewhat better (only around 5 minutes to build the DB), but the database file itself was 80MB!!. I don't have any idea as to why it would be this way.
 
 ### Queries
 
@@ -51,7 +51,7 @@ Find the most recently visited 10 urls:
 
 Took around 200ms on my machine consistently.
 
-The equivalent SQL query on places (`SELECT p.url FROM moz_places p JOIN moz_historyvisits v ON p.id = v.place_id ORDER BY v.visit_date DESC LIMIT 10`) took 4ms.
+The equivalent SQL query on places (`SELECT p.url FROM moz_places p JOIN moz_historyvisits v ON p.id = v.place_id ORDER BY v.visit_date DESC LIMIT 10`) took an average of 4ms over a few runs.
 
 ---
 
