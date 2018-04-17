@@ -2,8 +2,7 @@
   { :db/ident :place/url
     :db/valueType :db.type/string
     :db/cardinality :db.cardinality/one
-    :db/index true
-    :db/fulltext true }
+    :db/index true }
 
   { :db/ident :place/url_hash
     :db/valueType :db.type/long
@@ -13,14 +12,12 @@
   { :db/ident :place/title
     :db/valueType :db.type/string
     :db/cardinality :db.cardinality/one
-    :db/index true
-    :db/fulltext true }
+    :db/index true }
 
   { :db/ident :place/description
     :db/valueType :db.type/string
     :db/cardinality :db.cardinality/one
-    :db/index true
-    :db/fulltext true }
+    :db/index true }
 
   { :db/ident :place/frecency
     :db/valueType :db.type/long
