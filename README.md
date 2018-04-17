@@ -6,7 +6,7 @@ Usage: `cargo run --release path/to/your/places.sqlite`. Alternate usage `cargo 
 
 (If you get an error, one of the `unwrap()`s, unchecked array accesses, or similar things in this code hit a case on your machine it didn't hit on mine. Sorry, this is very far from the most robust code I've ever written. Ping me in IRC, or file an issue if you hit this but would really like to give it a go for whatever reason)
 
-This will produce a `mentat_places.db` file which is your mentat database. You then can open this from the mentat_cli using `cargo run --release -p mentat_cli -d path/to/mentat_places.db` from the mentat repository (remember to do `.timer on` to enable timing of queries and expressions in mentat's CLI).
+This will produce a `mentat_places.db` file which is your mentat database. You then can open this from the mentat_cli using `cargo run --release -p mentat_cli -d path/to/mentat_places.db` from the mentat repository (remember to do run `.timer on` to enable timing of queries and expressions in mentat's CLI -- if you want to time SQLite running on your places.sqlite as a comparison, `.timer on` works for it as well).
 
 The schema is in `places.schema`. You can modify it and the program will use the change without recompiling, but it may or may not work depending on what you change.
 
