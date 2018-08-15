@@ -6,7 +6,7 @@ extern crate rusqlite;
 extern crate lazy_static;
 
 use std::{env, process};
-use std::fs::{File};
+use std::fs::{self, File};
 use std::io::{Read, Write, self};
 use std::fmt::{Write as FmtWrite};
 
@@ -209,6 +209,7 @@ fn main() {
     let in_db_path = args[1].clone();
     let out_db_path = args.get(2).cloned().unwrap_or("./mentat_places.db".into());
     let places = Connection::open_with_flags(in_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    fs::remove_file(&out_db_path).unwrap();
     let mut store = Store::open_empty(&out_db_path).unwrap();
 
     store.transact(&schema).expect("Failed to transact schema...");

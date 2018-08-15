@@ -8,3 +8,8 @@ mentat = { git = "https://github.com/mozilla/mentat.git", tag = "v0.11.0" }
 rusqlite = { version = "0.13", features = ["bundled", "limits"] }
 lazy_static = "1.1.0"
 
+
+[profile.release]
+opt-level = 3
+debug = true
+lto = true
