@@ -31,9 +31,10 @@ struct PlaceEntry {
 }
 
 impl PlaceEntry {
-    pub fn add_to_store(&self, store: &mut Store) -> mentat::errors::Result<()> {
+    pub fn add_to_store<'a, 'b>(&self, in_progress: mentat::InProgress<'a, 'b>) 
+    -> mentat::errors::Result<mentat::InProgress<'a, 'b>>
+    {
 
-        let in_progress = store.begin_transaction()?;
         let (mut ip, place_ent_id) = {
             let mut builder = in_progress.builder().describe_tempid("place");
             builder.add(kw!(:place/url), TypedValue::typed_string(&self.url))?;
@@ -60,8 +61,7 @@ impl PlaceEntry {
             ip = prog;
         }
 
-        ip.commit()?;
-        Ok(())
+        Ok(ip)
     }
 
     pub fn from_row(row: &Row, transition_type_entids: &[Entid]) -> PlaceEntry {
@@ -152,6 +152,8 @@ fn main() {
 
     let mut so_far = 0;
     let mut rows = stmt.query(&[]).unwrap();
+    let mut in_progress = store.begin_transaction().unwrap();
+
     while let Some(row_or_error) = rows.next() {
         let row = row_or_error.unwrap();
         let id: i64 = row.get(0);
@@ -161,7 +163,7 @@ fn main() {
             continue;
         }
         if current_place.id >= 0 {
-            current_place.add_to_store(&mut store).unwrap();
+            in_progress = current_place.add_to_store(in_progress).unwrap();
             print!("\rInserting {} / {} places (approx.)", so_far, place_count);
             io::stdout().flush().unwrap();
             so_far += 1;
@@ -169,8 +171,10 @@ fn main() {
         current_place = PlaceEntry::from_row(&row, &type_to_ent_id);
     }
     if current_place.id >= 0 {
-        current_place.add_to_store(&mut store).unwrap();
-        print!("\rInserting {} / {} places (approx.)", so_far + 1, place_count);
+        in_progress = current_place.add_to_store(in_progress).unwrap();
+        println!("\rInserting {} / {} places (approx.)", so_far + 1, place_count);
     }
-    println!("\nDone!")
+    println!("Committing...");
+    in_progress.commit().unwrap();
+    println!("Done!")
 }
