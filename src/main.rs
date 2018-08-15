@@ -2,10 +2,13 @@
 extern crate mentat;
 extern crate rusqlite;
 
-use mentat::entity_builder::BuildTerms;
+#[macro_use]
+extern crate lazy_static;
+
 use std::{env, process};
 use std::fs::{File};
 use std::io::{Read, Write, self};
+use std::fmt::{Write as FmtWrite};
 
 use rusqlite::{
     Connection,
@@ -14,11 +17,131 @@ use rusqlite::{
 };
 
 use mentat::{
-    HasSchema,
     Store,
-    TypedValue,
-    Entid,
+    Keyword,
+    errors::Result as MentatResult,
 };
+
+const MAX_TRANSACT_BUFFER_SIZE: usize = 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct TransactBuilder {
+    counter: u64,
+    data: String,
+    total_terms: u64,
+    terms: u64,
+}
+
+impl TransactBuilder {
+    #[inline]
+    pub fn new() -> Self {
+        Self { counter: 0, data: "[\n".into(), terms: 0, total_terms: 0 }
+    }
+
+    #[inline]
+    pub fn next_tempid(&mut self) -> u64 {
+        self.counter += 1;
+        self.counter
+    }
+
+    #[inline]
+    pub fn add_ref_to_tmpid(&mut self, tmpid: u64, attr: &Keyword, ref_tmpid: u64) {
+        write!(self.data, " [:db/add \"{}\" {} \"{}\"]\n", tmpid, attr, ref_tmpid).unwrap();
+        self.terms += 1;
+        self.total_terms += 1;
+    }
+
+    #[inline]
+    pub fn add_inst(&mut self, tmpid: u64, attr: &Keyword, micros: i64) {
+        write!(self.data, " [:db/add \"{}\" {} #instmicros {}]\n", tmpid, attr, micros).unwrap();
+        self.terms += 1;
+        self.total_terms += 1;
+    }
+
+    #[inline]
+    pub fn add_kw(&mut self, tmpid: u64, attr: &Keyword, val: &Keyword) {
+        write!(self.data, " [:db/add \"{}\" {} {}]\n", tmpid, attr, val).unwrap();
+        self.terms += 1;
+        self.total_terms += 1;
+    }
+
+    #[inline]
+    pub fn add_str(&mut self, tmpid: u64, attr: &Keyword, val: &str) {
+        // {:?} escapes some chars EDN can't parse (e.g. \'...)
+        let s = val.replace("\\", "\\\\").replace("\"", "\\\"");
+        write!(self.data, " [:db/add \"{}\" {} \"{}\"]\n", tmpid, attr, s).unwrap();
+        self.terms += 1;
+        self.total_terms += 1;
+    }
+
+    #[inline]
+    pub fn add_long(&mut self, tmpid: u64, attr: &Keyword, val: i64) {
+        write!(self.data, " [:db/add \"{}\" {} {}]\n", tmpid, attr, val).unwrap();
+        self.terms += 1;
+        self.total_terms += 1;
+    }
+
+    #[inline]
+    pub fn finish(&mut self) -> &str {
+        self.data.push(']');
+        &self.data
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.terms = 0;
+        self.data.clear();
+        self.data.push_str("[\n")
+    }
+
+    #[inline]
+    pub fn should_finish(&self) -> bool {
+        self.data.len() >= MAX_TRANSACT_BUFFER_SIZE
+    }
+
+    #[inline]
+    pub fn maybe_transact(&mut self, store: &mut Store) -> MentatResult<()> {
+        if self.should_finish() {
+            self.transact(store)?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn transact(&mut self, store: &mut Store) -> MentatResult<()> {
+        if self.terms != 0 {
+            println!("\nTransacting {} terms (total = {})", self.terms, self.total_terms);
+            let res = store.transact(self.finish());
+            if res.is_err() { println!("{}", self.data); }
+            res?;
+            self.reset();
+        }
+        Ok(())
+    }
+}
+
+lazy_static! {
+    static ref PLACE_URL: Keyword = kw!(:place/url);
+    static ref PLACE_URL_HASH: Keyword = kw!(:place/url_hash);
+    static ref PLACE_TITLE: Keyword = kw!(:place/title);
+    static ref PLACE_DESCRIPTION: Keyword = kw!(:place/description);
+    static ref PLACE_FRECENCY: Keyword = kw!(:place/frecency);
+    static ref VISIT_PLACE: Keyword = kw!(:visit/place);
+    static ref VISIT_DATE: Keyword = kw!(:visit/date);
+    static ref VISIT_TYPE: Keyword = kw!(:visit/type);
+
+    static ref VISIT_TYPES: Vec<Keyword> = vec![
+        kw!(:visit.type/link),
+        kw!(:visit.type/typed),
+        kw!(:visit.type/bookmark),
+        kw!(:visit.type/embed),
+        kw!(:visit.type/redirect_permanent),
+        kw!(:visit.type/redirect_temporary),
+        kw!(:visit.type/download),
+        kw!(:visit.type/framed_link),
+        kw!(:visit.type/reload),
+    ];
+}
 
 struct PlaceEntry {
     pub id: i64,
@@ -27,44 +150,31 @@ struct PlaceEntry {
     pub description: Option<String>,
     pub title: String,
     pub frecency: i64,
-    pub visits: Vec<(i64, Entid)>,
+    pub visits: Vec<(i64, &'static Keyword)>,
 }
 
 impl PlaceEntry {
-    pub fn add_to_store<'a, 'b>(&self, in_progress: mentat::InProgress<'a, 'b>) 
-    -> mentat::errors::Result<mentat::InProgress<'a, 'b>>
-    {
-
-        let (mut ip, place_ent_id) = {
-            let mut builder = in_progress.builder().describe_tempid("place");
-            builder.add(kw!(:place/url), TypedValue::typed_string(&self.url))?;
-            builder.add(kw!(:place/url_hash), TypedValue::Long(self.url_hash))?;
-            builder.add(kw!(:place/title), TypedValue::typed_string(&self.title))?;
-            if let &Some(ref desc) = &self.description {
-                builder.add(kw!(:place/description), TypedValue::typed_string(desc))?;
-            }
-
-            builder.add(kw!(:place/frecency), TypedValue::Long(self.frecency))?;
-
-            let (ip, r) = builder.transact();
-            (ip, *r.expect("builder transact place").tempids.get("place").expect("get")) // from above
-        };
-
-        assert!(self.visits.len() > 0);
-        for &(microtime, visit_type) in &self.visits {
-            let mut builder = ip.builder().describe_tempid("visit");
-            builder.add(kw!(:visit/place), TypedValue::Ref(place_ent_id))?;
-            builder.add(kw!(:visit/date), TypedValue::instant(microtime))?;
-            builder.add(kw!(:visit/type), TypedValue::Ref(visit_type))?;
-            let (prog, r) = builder.transact();
-            r.expect("builder transact visit");
-            ip = prog;
+    pub fn add(&self, builder: &mut TransactBuilder) {
+        let place_id = builder.next_tempid();
+        builder.add_str(place_id, &*PLACE_URL, &self.url);
+        builder.add_long(place_id, &*PLACE_URL_HASH, self.url_hash);
+        builder.add_str(place_id, &*PLACE_TITLE, &self.title);
+        if let Some(desc) = &self.description {
+            builder.add_str(place_id, &*PLACE_DESCRIPTION, desc);
         }
 
-        Ok(ip)
+        builder.add_long(place_id, &*PLACE_FRECENCY, self.frecency);
+
+        assert!(self.visits.len() > 0);
+        for (microtime, visit_type) in &self.visits {
+            let visit_id = builder.next_tempid();
+            builder.add_ref_to_tmpid(visit_id, &*VISIT_PLACE, place_id);
+            builder.add_inst(visit_id, &*VISIT_DATE, *microtime);
+            builder.add_kw(visit_id, &*VISIT_TYPE, visit_type);
+        }
     }
 
-    pub fn from_row(row: &Row, transition_type_entids: &[Entid]) -> PlaceEntry {
+    pub fn from_row(row: &Row) -> PlaceEntry {
         let transition_type: i64 = row.get(7);
         PlaceEntry {
             id: row.get(0),
@@ -73,8 +183,7 @@ impl PlaceEntry {
             description: row.get(3),
             title: row.get::<i32, Option<String>>(4).unwrap_or("".into()),
             frecency: row.get(5),
-            visits: vec![(row.get(6), transition_type_entids[
-                (transition_type as usize).saturating_sub(1)])],
+            visits: vec![(row.get(6), &VISIT_TYPES[(transition_type as usize).saturating_sub(1)])],
         }
     }
 }
@@ -93,17 +202,6 @@ fn main() {
         process::exit(1);
     }
 
-    let visit_types = &[
-        kw!(:visit.type/link),
-        kw!(:visit.type/typed),
-        kw!(:visit.type/bookmark),
-        kw!(:visit.type/embed),
-        kw!(:visit.type/redirect_permanent),
-        kw!(:visit.type/redirect_temporary),
-        kw!(:visit.type/download),
-        kw!(:visit.type/framed_link),
-        kw!(:visit.type/reload),
-    ];
 
     let schema = read_file("./places.schema").expect(
         "Failed to read data from `places.schema` file");
@@ -114,8 +212,8 @@ fn main() {
     let mut store = Store::open_empty(&out_db_path).unwrap();
 
     store.transact(&schema).expect("Failed to transact schema...");
-    let type_to_ent_id = visit_types.iter().map(|kw|
-        store.conn().current_schema().get_entid(kw).unwrap().0).collect::<Vec<_>>();
+    // let type_to_ent_id = visit_types.iter().map(|kw|
+        // store.conn().current_schema().get_entid(kw).unwrap().0).collect::<Vec<_>>();
 
     let mut stmt = places.prepare("
         SELECT
@@ -152,29 +250,36 @@ fn main() {
 
     let mut so_far = 0;
     let mut rows = stmt.query(&[]).unwrap();
-    let mut in_progress = store.begin_transaction().unwrap();
+    let mut builder = TransactBuilder::new();
 
     while let Some(row_or_error) = rows.next() {
         let row = row_or_error.unwrap();
         let id: i64 = row.get(0);
         if current_place.id == id {
             let tty: i64 = row.get(7);
-            current_place.visits.push((row.get(6), *type_to_ent_id.get((tty - 1) as usize).unwrap_or(&0)));
+            current_place.visits.push((
+                row.get(6),
+                &VISIT_TYPES.get((tty.max(0) as usize).saturating_sub(1))
+                    .unwrap_or_else(|| &VISIT_TYPES[0])
+            ));
             continue;
         }
+
         if current_place.id >= 0 {
-            in_progress = current_place.add_to_store(in_progress).unwrap();
-            print!("\rInserting {} / {} places (approx.)", so_far, place_count);
+            current_place.add(&mut builder);
+            builder.maybe_transact(&mut store).unwrap();
+            print!("\rProcessing {} / {} places (approx.)", so_far, place_count);
             io::stdout().flush().unwrap();
             so_far += 1;
         }
-        current_place = PlaceEntry::from_row(&row, &type_to_ent_id);
+        current_place = PlaceEntry::from_row(&row);
     }
+
     if current_place.id >= 0 {
-        in_progress = current_place.add_to_store(in_progress).unwrap();
-        println!("\rInserting {} / {} places (approx.)", so_far + 1, place_count);
+        current_place.add(&mut builder);
+        builder.maybe_transact(&mut store).unwrap();
+        println!("\rProcessing {} / {} places (approx.)", so_far + 1, place_count);
     }
-    println!("Committing...");
-    in_progress.commit().unwrap();
-    println!("Done!")
+    builder.transact(&mut store).unwrap();
+    println!("Done!");
 }

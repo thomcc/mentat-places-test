@@ -365,6 +365,7 @@ dependencies = [
 name = "mentat-places-test"
 version = "0.1.0"
 dependencies = [
+ "lazy_static 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "mentat 0.11.0 (git+https://github.com/mozilla/mentat.git?tag=v0.11.0)",
  "rusqlite 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
