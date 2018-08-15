@@ -10,12 +10,12 @@
     }
 
   { :db/ident :place/title
-    :db/valueType :db.type/string
+    :db/valueType :db.type/ref
     :db/cardinality :db.cardinality/one
     }
 
   { :db/ident :place/description
-    :db/valueType :db.type/string
+    :db/valueType :db.type/ref
     :db/cardinality :db.cardinality/one
     }
 
@@ -38,6 +38,10 @@
     :db/valueType :db.type/instant
     :db/cardinality :db.cardinality/one
     }
+
+  { :db/ident :meta/strings 
+    :db/valueType :db.type/string
+    :db/cardinality :db.cardinality/one }
 
   { :db/ident :visit.type/link }
   { :db/ident :visit.type/typed }

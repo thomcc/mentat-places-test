@@ -5,6 +5,7 @@ extern crate rusqlite;
 #[macro_use]
 extern crate lazy_static;
 
+use std::collections::HashMap;
 use std::{env, process};
 use std::fs::{self, File};
 use std::io::{Read, Write, self};
@@ -30,12 +31,24 @@ struct TransactBuilder {
     data: String,
     total_terms: u64,
     terms: u64,
+    strings: HashMap<String, u64>,
+    string_misses: usize,
+    string_hits: usize,
+    
 }
 
 impl TransactBuilder {
     #[inline]
     pub fn new() -> Self {
-        Self { counter: 0, data: "[\n".into(), terms: 0, total_terms: 0 }
+        Self {
+            counter: 0,
+            data: "[\n".into(),
+            terms: 0,
+            total_terms: 0,
+            strings: HashMap::new(),
+            string_hits: 0,
+            string_misses: 0
+        }
     }
 
     #[inline]
@@ -94,6 +107,18 @@ impl TransactBuilder {
         self.data.push_str("[\n")
     }
 
+    pub fn get_or_add_string_tempid(&mut self, s: &str) -> u64 {
+        if let Some(&id) = self.strings.get(s) {
+            self.string_hits += 1;
+            return id
+        }
+        let tmp_id = self.next_tempid();
+        self.add_str(tmp_id, &*META_STRINGS, s);
+        self.strings.insert(s.to_string(), tmp_id);
+        self.string_misses += 1;
+        tmp_id
+    }
+
     #[inline]
     pub fn should_finish(&self) -> bool {
         self.data.len() >= MAX_TRANSACT_BUFFER_SIZE
@@ -129,6 +154,7 @@ lazy_static! {
     static ref VISIT_PLACE: Keyword = kw!(:visit/place);
     static ref VISIT_DATE: Keyword = kw!(:visit/date);
     static ref VISIT_TYPE: Keyword = kw!(:visit/type);
+    static ref META_STRINGS: Keyword = kw!(:meta/strings);
 
     static ref VISIT_TYPES: Vec<Keyword> = vec![
         kw!(:visit.type/link),
@@ -158,9 +184,12 @@ impl PlaceEntry {
         let place_id = builder.next_tempid();
         builder.add_str(place_id, &*PLACE_URL, &self.url);
         builder.add_long(place_id, &*PLACE_URL_HASH, self.url_hash);
-        builder.add_str(place_id, &*PLACE_TITLE, &self.title);
+
+        let id = builder.get_or_add_string_tempid(&self.title);
+        builder.add_ref_to_tmpid(place_id, &*PLACE_TITLE, id);
         if let Some(desc) = &self.description {
-            builder.add_str(place_id, &*PLACE_DESCRIPTION, desc);
+            let desc_id = builder.get_or_add_string_tempid(desc);
+            builder.add_ref_to_tmpid(place_id, &*PLACE_DESCRIPTION, desc_id);
         }
 
         builder.add_long(place_id, &*PLACE_FRECENCY, self.frecency);
@@ -283,4 +312,5 @@ fn main() {
     }
     builder.transact(&mut store).unwrap();
     println!("Done!");
+    println!("Strings: Missed {}, hit {}", builder.string_misses, builder.string_hits)
 }
