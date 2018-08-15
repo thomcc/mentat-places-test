@@ -3,3 +3,5 @@
 **/*.rs.bk
 *.db
 *.db-*
+*.sqlite
+*.sqlite-*

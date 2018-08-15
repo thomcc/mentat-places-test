@@ -36,14 +36,14 @@ impl PlaceEntry {
     let in_progress = store.begin_transaction()?;
     let (mut ip, place_ent_id) = {
       let mut builder = in_progress.builder().describe_tempid("place");
-      builder.add_kw(&kw!(:place/url), TypedValue::typed_string(&self.url))?;
-      builder.add_kw(&kw!(:place/url_hash), TypedValue::Long(self.url_hash))?;
-      builder.add_kw(&kw!(:place/title), TypedValue::typed_string(&self.title))?;
+      builder.add(kw!(:place/url), TypedValue::typed_string(&self.url))?;
+      builder.add(kw!(:place/url_hash), TypedValue::Long(self.url_hash))?;
+      builder.add(kw!(:place/title), TypedValue::typed_string(&self.title))?;
       if let &Some(ref desc) = &self.description {
-        builder.add_kw(&kw!(:place/description), TypedValue::typed_string(desc))?;
+        builder.add(kw!(:place/description), TypedValue::typed_string(desc))?;
       }
 
-      builder.add_kw(&kw!(:place/frecency), TypedValue::Long(self.frecency))?;
+      builder.add(kw!(:place/frecency), TypedValue::Long(self.frecency))?;
 
       let (ip, r) = builder.transact();
       (ip, *r.expect("builder transact place").tempids.get("place").expect("get")) // from above
@@ -52,9 +52,9 @@ impl PlaceEntry {
     assert!(self.visits.len() > 0);
     for &(microtime, visit_type) in &self.visits {
       let mut builder = ip.builder().describe_tempid("visit");
-      builder.add_kw(&kw!(:visit/place), TypedValue::Ref(place_ent_id))?;
-      builder.add_kw(&kw!(:visit/date), TypedValue::instant(microtime))?;
-      builder.add_kw(&kw!(:visit/type), TypedValue::Ref(visit_type))?;
+      builder.add(kw!(:visit/place), TypedValue::Ref(place_ent_id))?;
+      builder.add(kw!(:visit/date), TypedValue::instant(microtime))?;
+      builder.add(kw!(:visit/type), TypedValue::Ref(visit_type))?;
       let (prog, r) = builder.transact();
       r.expect("builder transact visit");
       ip = prog;
