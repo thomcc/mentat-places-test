@@ -203,15 +203,15 @@ impl PlaceEntry {
     }
 
     pub fn from_row(row: &Row) -> PlaceEntry {
-        let transition_type: i64 = row.get(7);
+        let transition_type: i64 = row.get("visit_type");
         PlaceEntry {
-            id: row.get(0),
-            url: row.get(1),
-            url_hash: row.get(2),
-            description: row.get(3),
-            title: row.get::<i32, Option<String>>(4).unwrap_or("".into()),
-            frecency: row.get(5),
-            visits: vec![(row.get(6), &VISIT_TYPES[(transition_type as usize).saturating_sub(1)])],
+            id: row.get("place_id"),
+            url: row.get("place_url"),
+            url_hash: row.get("place_url_hash"),
+            description: row.get("place_description"),
+            title: row.get::<_, Option<String>>("place_title").unwrap_or("".into()),
+            frecency: row.get("place_frecency"),
+            visits: vec![(row.get("visit_date"), &VISIT_TYPES[(transition_type as usize).saturating_sub(1)])],
         }
     }
 }
@@ -291,14 +291,14 @@ fn main() -> Result<(), failure::Error> {
 
     let mut stmt = places.prepare("
         SELECT
-            p.id,
-            p.url,
-            p.url_hash,
-            p.description,
-            p.title,
-            p.frecency,
-            v.visit_date,
-            v.visit_type
+            p.id          as place_id,
+            p.url         as place_url,
+            p.url_hash    as place_url_hash,
+            p.description as place_description,
+            p.title       as place_title,
+            p.frecency    as place_frecency,
+            v.visit_date  as visit_date,
+            v.visit_type  as visit_type
         FROM moz_places p
         JOIN moz_historyvisits v
             ON p.id = v.place_id
@@ -335,11 +335,11 @@ fn main() -> Result<(), failure::Error> {
     let mut rows = stmt.query(&[])?;
     while let Some(row_or_error) = rows.next() {
         let row = row_or_error?;
-        let id: i64 = row.get(0);
+        let id: i64 = row.get("place_id");
         if current_place.id == id {
-            let tty: i64 = row.get(7);
+            let tty: i64 = row.get("visit_type");
             current_place.visits.push((
-                row.get(6),
+                row.get("visit_date"),
                 &VISIT_TYPES.get((tty.max(0) as usize).saturating_sub(1))
                     .unwrap_or_else(|| &VISIT_TYPES[0])
             ));
