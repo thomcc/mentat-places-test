@@ -1,16 +1,35 @@
 # Mentat / Places test
 
-I wanted to see how mentat would handle inserting all of the history places and visits from places.sqlite into a mentat database. This does that. The schema I used is [here](https://github.com/thomcc/mentat-places-test/blob/master/places.schema). It's based on the schema from [the mentat fixtures dir](https://github.com/mozilla/mentat/blob/master/fixtures/cities.schema), and what seemed relevant from [the datomic best practices guide](https://docs.datomic.com/cloud/best.html).
+I wanted to see how mentat would handle inserting all of the history places and visits from places.sqlite into a mentat database. This does that. The schema I used is [here](https://github.com/thomcc/mentat-places-test/blob/master/places.schema).
 
-Usage: `cargo run --release path/to/your/places.sqlite`. Alternate usage `cargo run --release path/to/your/places.sqlite path/to/mentat_places.db` (you can pass path to the output db as a 2nd arg, it defaults to `mentat_places.db` in your cwd). It will show you progress, although the total is an approximation because it's 11PM on a Monday and this took longer than I expected.
+```
+mentat-places-test
 
-(If you get an error, one of the `unwrap()`s, unchecked array accesses, or similar things in this code hit a case on your machine it didn't hit on mine. Sorry, this is very far from the most robust code I've ever written. Ping me in IRC, or file an issue if you hit this but would really like to give it a go for whatever reason)
+USAGE:
+    mentat-places-test [FLAGS] [ARGS]
 
-This will produce a `mentat_places.db` file which is your mentat database. You then can open this from the mentat_cli using `cargo run --release -p mentat_cli -d path/to/mentat_places.db` from the mentat repository (remember to do run `.timer on` to enable timing of queries and expressions in mentat's CLI -- if you want to time SQLite running on your places.sqlite as a comparison, `.timer on` works for it as well).
+FLAGS:
+    -f, --force        Overwrite OUTPUT if it already exists
+    -h, --help         Prints help information
+    -r, --realistic    Insert everything with one transaction per visit. This is
+                       a lot slower, but is a more realistic workload. It produces
+                       databases that are ~40% larger (for me).
+    -v                 Sets the level of verbosity (pass up to 3 times for more
+                       verbosity -- e.g. -vvv enables trace logs)
+    -V, --version      Prints version information
 
-The schema is in `places.schema`. You can modify it and the program will use the change without recompiling, but it may or may not work depending on what you change.
+ARGS:
+    <OUTPUT>    Path where we should output the anonymized db (defaults to ./mentat_places.db)
+    <PLACES>    Path to places.sqlite. If not provided, we'll use the largest
+                places.sqlite in your firefox profiles
+
+```
+
+Some notes:
+
+- You probably should do a release build, since this can be quite slow for a debug build.
+- Regardless of release or debug, it's slow if you pas `--realistic` (or `-r`). You should probably pass this flag when drawing conclusions from the data, but if just experimenting its too slow.
 
 ## License
 
 This code is cc0 / public domain.
-

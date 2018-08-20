@@ -4,11 +4,19 @@ extern crate rusqlite;
 
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+extern crate clap;
+extern crate find_places_db;
+#[macro_use]
+extern crate failure;
+extern crate tempfile;
 
-use std::{env, process};
-use std::fs::{self, File};
-use std::io::{Read, Write, self};
+use std::fs;
+use std::io::{Write, self};
 use std::fmt::{Write as FmtWrite};
+use std::path::Path;
 
 use rusqlite::{
     Connection,
@@ -22,7 +30,7 @@ use mentat::{
     errors::Result as MentatResult,
 };
 
-const MAX_TRANSACT_BUFFER_SIZE: usize = 1024 * 1024 * 1024;
+// const MAX_TRANSACT_BUFFER_SIZE: usize = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct TransactBuilder {
@@ -30,12 +38,13 @@ struct TransactBuilder {
     data: String,
     total_terms: u64,
     terms: u64,
+    max_buffer_size: usize
 }
 
 impl TransactBuilder {
     #[inline]
-    pub fn new() -> Self {
-        Self { counter: 0, data: "[\n".into(), terms: 0, total_terms: 0 }
+    pub fn new_with_size(max_buffer_size: usize) -> Self {
+        Self { counter: 0, data: "[\n".into(), terms: 0, total_terms: 0, max_buffer_size }
     }
 
     #[inline]
@@ -96,27 +105,30 @@ impl TransactBuilder {
 
     #[inline]
     pub fn should_finish(&self) -> bool {
-        self.data.len() >= MAX_TRANSACT_BUFFER_SIZE
+        self.data.len() >= self.max_buffer_size
     }
 
     #[inline]
-    pub fn maybe_transact(&mut self, store: &mut Store) -> MentatResult<()> {
+    pub fn maybe_transact(&mut self, store: &mut Store) -> MentatResult<Option<mentat::TxReport>> {
         if self.should_finish() {
-            self.transact(store)?;
+            Ok(self.transact(store)?)
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     #[inline]
-    pub fn transact(&mut self, store: &mut Store) -> MentatResult<()> {
+    pub fn transact(&mut self, store: &mut Store) -> MentatResult<Option<mentat::TxReport>> {
         if self.terms != 0 {
-            println!("\nTransacting {} terms (total = {})", self.terms, self.total_terms);
+            debug!("\nTransacting {} terms (total = {})", self.terms, self.total_terms);
             let res = store.transact(self.finish());
-            if res.is_err() { println!("{}", self.data); }
-            res?;
+            if res.is_err() { error!("Error transacting:\n{}", self.data); }
+            let report = res?;
             self.reset();
+            Ok(Some(report))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 }
 
@@ -154,7 +166,7 @@ struct PlaceEntry {
 }
 
 impl PlaceEntry {
-    pub fn add(&self, builder: &mut TransactBuilder) {
+    pub fn add(&self, builder: &mut TransactBuilder, store: &mut Store) -> Result<(), failure::Error> {
         let place_id = builder.next_tempid();
         builder.add_str(place_id, &*PLACE_URL, &self.url);
         builder.add_long(place_id, &*PLACE_URL_HASH, self.url_hash);
@@ -166,12 +178,28 @@ impl PlaceEntry {
         builder.add_long(place_id, &*PLACE_FRECENCY, self.frecency);
 
         assert!(self.visits.len() > 0);
-        for (microtime, visit_type) in &self.visits {
-            let visit_id = builder.next_tempid();
-            builder.add_ref_to_tmpid(visit_id, &*VISIT_PLACE, place_id);
-            builder.add_inst(visit_id, &*VISIT_DATE, *microtime);
-            builder.add_kw(visit_id, &*VISIT_TYPE, visit_type);
+
+        if builder.max_buffer_size == 0 {
+            let report = builder.transact(store)?.unwrap();
+            let place_eid = report.tempids.get(&format!("{}", place_id)).unwrap();
+            // One transaction per visit.
+            for (microtime, visit_type) in &self.visits {
+                let visit_id = builder.next_tempid();
+                builder.add_long(visit_id, &*VISIT_PLACE, *place_eid);
+                builder.add_inst(visit_id, &*VISIT_DATE, *microtime);
+                builder.add_kw(visit_id, &*VISIT_TYPE, visit_type);
+                builder.transact(store)?;
+            }
+        } else {
+            for (microtime, visit_type) in &self.visits {
+                let visit_id = builder.next_tempid();
+                builder.add_ref_to_tmpid(visit_id, &*VISIT_PLACE, place_id);
+                builder.add_inst(visit_id, &*VISIT_DATE, *microtime);
+                builder.add_kw(visit_id, &*VISIT_TYPE, visit_type);
+            }
+            builder.maybe_transact(store)?;
         }
+        Ok(())
     }
 
     pub fn from_row(row: &Row) -> PlaceEntry {
@@ -188,38 +216,89 @@ impl PlaceEntry {
     }
 }
 
-fn read_file(path: &str) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut string = String::with_capacity((file.metadata()?.len() + 1) as usize);
-    file.read_to_string(&mut string)?;
-    Ok(string)
-}
+fn main() -> Result<(), failure::Error> {
+    let matches = clap::App::new("mentat-places-test")
+        .arg(clap::Arg::with_name("OUTPUT")
+            .index(1)
+            .help("Path where we should output the anonymized db (defaults to ./mentat_places.db)"))
+        .arg(clap::Arg::with_name("PLACES")
+            .index(2)
+            .help("Path to places.sqlite. If not provided, we'll use the largest places.sqlite in your firefox profiles"))
+        .arg(clap::Arg::with_name("v")
+            .short("v")
+            .multiple(true)
+            .help("Sets the level of verbosity (pass up to 3 times for more verbosity -- e.g. -vvv enables trace logs)"))
+        .arg(clap::Arg::with_name("force")
+            .short("f")
+            .long("force")
+            .help("Overwrite OUTPUT if it already exists"))
+        .arg(clap::Arg::with_name("realistic")
+            .short("r")
+            .long("realistic")
+            .help("Insert everything with one transaction per visit. This is a lot slower, \
+                   but is a more realistic workload. It produces databases that are ~40% larger (for me)."))
+    .get_matches();
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        println!("usage: {} <path/to/places.sqlite> [out = ./mentat_places.db]", args[0]);
-        process::exit(1);
+    env_logger::init_from_env(match matches.occurrences_of("v") {
+        0 => env_logger::Env::default().filter_or("RUST_LOG", "warn"),
+        1 => env_logger::Env::default().filter_or("RUST_LOG", "info"),
+        2 => env_logger::Env::default().filter_or("RUST_LOG", "debug"),
+        3 | _ => env_logger::Env::default().filter_or("RUST_LOG", "trace"),
+    });
+
+
+    let places_db = if let Some(places) = matches.value_of("PLACES") {
+        let meta = fs::metadata(&places)?;
+        find_places_db::PlacesLocation {
+            profile_name: "".into(),
+            path: fs::canonicalize(places)?,
+            db_size: meta.len(),
+        }
+    } else {
+        let mut dbs = find_places_db::get_all_places_dbs()?;
+        if dbs.len() == 0 {
+            error!("No dbs found!");
+            bail!("No dbs found");
+        }
+        for p in &dbs {
+            debug!("Found: profile {:?} with a {} places.sqlite", p.profile_name, p.friendly_db_size())
+        }
+        info!("Using profile {:?}", dbs[0].profile_name);
+        dbs.into_iter().next().unwrap()
+    };
+
+    debug!("Copying places.sqlite to a temp file for reading");
+    let temp_dir = tempfile::tempdir()?;
+    let temp_places_path = temp_dir.path().join("places.sqlite");
+    fs::copy(&places_db.path, &temp_places_path)?;
+    let places = Connection::open_with_flags(&temp_places_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+
+    let out_db_path = matches.value_of("OUTPUT").unwrap_or_else(|| "./mentat_places.db".into());
+
+    if Path::new(&out_db_path).exists() {
+        if matches.is_present("force") {
+            info!("Deleting previous `{}` because -f was passed", out_db_path);
+            fs::remove_file(&out_db_path)?;
+        } else {
+            error!("{} already exists but `-f` argument was not provided", out_db_path);
+            bail!("File already exists");
+        }
     }
 
-
-    let schema = read_file("./places.schema").expect(
-        "Failed to read data from `places.schema` file");
-
-    let in_db_path = args[1].clone();
-    let out_db_path = args.get(2).cloned().unwrap_or("./mentat_places.db".into());
-    let places = Connection::open_with_flags(in_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    fs::remove_file(&out_db_path).unwrap();
-    let mut store = Store::open_empty(&out_db_path).unwrap();
-
-    store.transact(&schema).expect("Failed to transact schema...");
-    // let type_to_ent_id = visit_types.iter().map(|kw|
-        // store.conn().current_schema().get_entid(kw).unwrap().0).collect::<Vec<_>>();
+    let mut store = Store::open_empty(&out_db_path)?;
+    debug!("Transacting initial schema");
+    store.transact(include_str!("../places.schema"))?;
 
     let mut stmt = places.prepare("
         SELECT
-            p.id, p.url, p.url_hash, p.description, p.title, p.frecency,
-            v.visit_date, v.visit_type
+            p.id,
+            p.url,
+            p.url_hash,
+            p.description,
+            p.title,
+            p.frecency,
+            v.visit_date,
+            v.visit_type
         FROM moz_places p
         JOIN moz_historyvisits v
             ON p.id = v.place_id
@@ -229,11 +308,11 @@ fn main() {
     let (place_count, visit_count) = {
         let mut stmt = places.prepare("select count(*) from moz_places").unwrap();
         let mut rows = stmt.query(&[]).unwrap();
-        let ps: i64 = rows.next().unwrap().unwrap().get(0);
+        let ps: i64 = rows.next().unwrap()?.get(0);
 
         let mut stmt = places.prepare("select count(*) from moz_historyvisits").unwrap();
         let mut rows = stmt.query(&[]).unwrap();
-        let vs: i64 = rows.next().unwrap().unwrap().get(0);
+        let vs: i64 = rows.next().unwrap()?.get(0);
         (ps, vs)
     };
 
@@ -249,12 +328,13 @@ fn main() {
         visits: vec![],
     };
 
-    let mut so_far = 0;
-    let mut rows = stmt.query(&[]).unwrap();
-    let mut builder = TransactBuilder::new();
+    let max_buffer_size = if matches.is_present("realistic") { 0 } else { 1024 * 1024 * 1024 * 1024 };
+    let mut builder = TransactBuilder::new_with_size(max_buffer_size);
 
+    let mut so_far = 0;
+    let mut rows = stmt.query(&[])?;
     while let Some(row_or_error) = rows.next() {
-        let row = row_or_error.unwrap();
+        let row = row_or_error?;
         let id: i64 = row.get(0);
         if current_place.id == id {
             let tty: i64 = row.get(7);
@@ -267,20 +347,21 @@ fn main() {
         }
 
         if current_place.id >= 0 {
-            current_place.add(&mut builder);
-            builder.maybe_transact(&mut store).unwrap();
+            current_place.add(&mut builder, &mut store)?;
+            // builder.maybe_transact(&mut store)?;
             print!("\rProcessing {} / {} places (approx.)", so_far, place_count);
-            io::stdout().flush().unwrap();
+            io::stdout().flush()?;
             so_far += 1;
         }
         current_place = PlaceEntry::from_row(&row);
     }
 
     if current_place.id >= 0 {
-        current_place.add(&mut builder);
-        builder.maybe_transact(&mut store).unwrap();
+        current_place.add(&mut builder, &mut store)?;
+        // builder.maybe_transact(&mut store)?;
         println!("\rProcessing {} / {} places (approx.)", so_far + 1, place_count);
     }
-    builder.transact(&mut store).unwrap();
+    builder.transact(&mut store)?;
     println!("Done!");
+    Ok(())
 }
